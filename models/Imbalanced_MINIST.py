@@ -11,7 +11,8 @@ import gzip
 import lzma
 from typing import Any, Callable, Dict, IO, List, Optional, Tuple, Union
 from torchvision.datasets.utils import download_url, download_and_extract_archive, extract_archive, verify_str_arg
-    
+import tqdm  # 添加进度条库
+
 
 
 class MNIST(VisionDataset):
@@ -149,17 +150,20 @@ class MNIST(VisionDataset):
 
     def download(self) -> None:
         """Download the MNIST data if it doesn't exist in processed_folder already."""
-
         if self._check_exists():
+            print('Files already downloaded and verified')
             return
 
+        print('Downloading MNIST dataset...')
         os.makedirs(self.raw_folder, exist_ok=True)
         os.makedirs(self.processed_folder, exist_ok=True)
-
+        
         # download files
         for url, md5 in self.resources:
             filename = url.rpartition('/')[2]
+            print(f'Downloading {filename}...')
             download_and_extract_archive(url, download_root=self.raw_folder, filename=filename, md5=md5)
+            print(f'Successfully downloaded {filename}')
 
         # process and save as torch files
         print('Processing...')
@@ -172,6 +176,8 @@ class MNIST(VisionDataset):
             read_image_file(os.path.join(self.raw_folder, 't10k-images-idx3-ubyte')),
             read_label_file(os.path.join(self.raw_folder, 't10k-labels-idx1-ubyte'))
         )
+        
+        print('Saving processed files...')
         with open(os.path.join(self.processed_folder, self.training_file), 'wb') as f:
             torch.save(training_set, f)
         with open(os.path.join(self.processed_folder, self.test_file), 'wb') as f:

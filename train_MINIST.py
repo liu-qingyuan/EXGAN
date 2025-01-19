@@ -45,20 +45,32 @@ time_mat = np.zeros([n_folds, 1])
 roc_mat = np.zeros([n_folds, 1])
 fscore_mat = np.zeros([n_folds, 1])
 
+# 在开始训练前添加打印信息
+print("Starting training with settings:")
+print(f"IR: {args.ir}")
+print(f"Max epochs: {args.max_epochs}")
+print(f"Ensemble num: {args.ensemble_num}")
+print("\nInitializing model...")
+
 #repeat the k-fold cross validation n_iterations times
 count = 0
 for _ in range(n_folds):
+    print(f"\nStarting fold {_ + 1}/{n_folds}")
     t0 = time()
-    #todo: add my method
+    
+    print("Initializing EX_GAN...")
     cb_gan = EX_GAN(args)
+    
+    print("Starting model training...")
     auc_train, f_train, auc_test, f_test = cb_gan.fit()
-    #clf.fit(X_train_norm)
-    #test_scores = clf.decision_function(X_test_norm)
+    
     t1 = time()
     duration = round(t1 - t0, ndigits=4)
     
-    print('AUC:{roc}, F_score:{f_score}, train_AUC:{train_auc} train_f_score:{train_f_score}'  
-                'execution time: {duration}'.format(roc=auc_test, f_score=f_test, train_auc=auc_train, train_f_score=f_train, duration=duration))
+    print(f'Fold {_ + 1} Results:')
+    print(f'Training - AUC: {auc_train:.4f}, F-score: {f_train:.4f}')
+    print(f'Testing  - AUC: {auc_test:.4f}, F-score: {f_test:.4f}')
+    print(f'Execution time: {duration} seconds')
 
     time_mat[count, 0] = duration
     roc_mat[count, 0] = auc_test
