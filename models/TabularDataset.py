@@ -101,6 +101,15 @@ class TabularDataset(Dataset):
         print(f"Feature dimension: {self.data.shape[1]}")
         print(f"Class distribution: {np.bincount(self.targets)}")
 
+        if self.train:
+            # 添加高斯噪声
+            noise = torch.randn_like(self.data) * 0.01
+            self.data = self.data + noise
+            
+            # 特征遮蔽
+            mask = torch.rand_like(self.data) > 0.1  # 10%概率遮蔽
+            self.data = self.data * mask
+
     def __getitem__(self, index):
         """
         Args:

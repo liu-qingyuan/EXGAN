@@ -22,8 +22,35 @@ from .pyod_utils import get_measure
 from .TabularDataset import TabularDataset
 from tqdm import tqdm
 
+class ResBlock(nn.Module):
+    def __init__(self, in_dim, out_dim, which_linear=nn.Linear):
+        super(ResBlock, self).__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        
+        self.layers = nn.Sequential(
+            which_linear(in_dim, out_dim),
+            nn.InstanceNorm1d(out_dim),
+            nn.LeakyReLU(0.2),
+            nn.Dropout(0.2),
+            which_linear(out_dim, out_dim),
+            nn.InstanceNorm1d(out_dim),
+            nn.LeakyReLU(0.2),
+            nn.Dropout(0.2)
+        )
+        
+        # Shortcut connection
+        self.shortcut = (
+            nn.Sequential(which_linear(in_dim, out_dim))
+            if in_dim != out_dim
+            else nn.Identity()
+        )
+        
+    def forward(self, x):
+        return self.layers(x) + self.shortcut(x)
+
 class Generator(nn.Module):
-    def __init__(self, input_dim=63, hidden_dim=256, init='ortho', SN_used=True):
+    def __init__(self, input_dim=63, hidden_dim=512, init='ortho', SN_used=True):
         super(Generator, self).__init__()
         self.init = init
         
@@ -32,16 +59,21 @@ class Generator(nn.Module):
         else:
             self.which_linear = nn.Linear
             
+        # 使用ResBlock构建更深的网络
         self.model = nn.Sequential(
+            # 初始层
             self.which_linear(input_dim, hidden_dim),
             nn.InstanceNorm1d(hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            self.which_linear(hidden_dim, hidden_dim),
-            nn.InstanceNorm1d(hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            self.which_linear(hidden_dim, input_dim),
+            nn.LeakyReLU(0.2),
+            
+            # ResBlocks with different widths
+            ResBlock(hidden_dim, hidden_dim, self.which_linear),
+            ResBlock(hidden_dim, hidden_dim//2, self.which_linear),
+            ResBlock(hidden_dim//2, hidden_dim//2, self.which_linear),
+            ResBlock(hidden_dim//2, hidden_dim//4, self.which_linear),
+            
+            # 输出层
+            self.which_linear(hidden_dim//4, input_dim),
             nn.Tanh()
         )
         
@@ -78,24 +110,29 @@ class Discriminator(nn.Module):
 
         self.which_embedding = nn.Embedding
         
-        # 特征提取器
+        # 特征提取器使用ResBlock
         self.feature_extractor = nn.Sequential(
+            # 初始层
             self.which_linear(input_dim, hidden_dim),
             nn.InstanceNorm1d(hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            self.which_linear(hidden_dim, hidden_dim),
-            nn.InstanceNorm1d(hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.2)
+            nn.LeakyReLU(0.2),
+            
+            # ResBlocks
+            ResBlock(hidden_dim, hidden_dim, self.which_linear),
+            ResBlock(hidden_dim, hidden_dim, self.which_linear),
+            ResBlock(hidden_dim, hidden_dim, self.which_linear)
         )
 
         # 真假判别器
-        self.output_fc = self.which_linear(hidden_dim, 1)
+        self.output_fc = nn.Sequential(
+            ResBlock(hidden_dim, hidden_dim//2, self.which_linear),
+            self.which_linear(hidden_dim//2, 1)
+        )
         
         # 类别判别器
         self.output_category = nn.Sequential(
-            self.which_linear(hidden_dim, 1),
+            ResBlock(hidden_dim, hidden_dim//2, self.which_linear),
+            self.which_linear(hidden_dim//2, 1),
             nn.Sigmoid()
         )
         
@@ -158,13 +195,13 @@ class EX_GAN(nn.Module):
         # 准备生成器
         self.netG_A_to_B = Generator(
             input_dim=63,  # 特征维度
-            hidden_dim=256,  # 隐藏层维度
+            hidden_dim=512,  # 隐藏层维度
             init=args.init_type, 
             SN_used=args.SN_used
         )
         self.netG_B_to_A = Generator(
             input_dim=63,
-            hidden_dim=256,
+            hidden_dim=512,
             init=args.init_type, 
             SN_used=args.SN_used
         )
@@ -172,10 +209,11 @@ class EX_GAN(nn.Module):
         self.netG_A_to_B = self.netG_A_to_B.to(self.device)
         self.netG_B_to_A = self.netG_B_to_A.to(self.device)
 
-        self.optimizerG = optim.Adam(
+        self.optimizerG = optim.AdamW(
             list(self.netG_A_to_B.parameters()) + list(self.netG_B_to_A.parameters()),
-            lr=args.lr_g, 
-            betas=(0.00, 0.99)
+            lr=args.lr_g,
+            betas=(0.5, 0.999),
+            weight_decay=0.01
         )
         
         # 创建判别器集成
@@ -196,9 +234,12 @@ class EX_GAN(nn.Module):
             self.NetD_Ensemble += [netD]
             self.opti_Ensemble += [optimizerD]
 
-        # 添加学习率调度器
-        self.scheduler_G = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizerG, mode='max', factor=0.5, patience=5, verbose=True
+        # 使用CosineAnnealingWarmRestarts替代ReduceLROnPlateau
+        self.scheduler_G = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            self.optimizerG, 
+            T_0=5,  # 初始周期
+            T_mult=2,  # 周期倍增
+            eta_min=1e-6  # 最小学习率
         )
         
         self.scheduler_D = []
@@ -445,6 +486,20 @@ class EX_GAN(nn.Module):
             consistency_loss = self.l1_loss(real_x0, fake_B) + self.l1_loss(real_x1, fake_A)
             gen_loss += cycle_loss + 1.0*epoch/self.args.max_epochs * consistency_loss
 
+            # 添加特征匹配损失
+            def feature_matching_loss(real_features, fake_features):
+                return F.mse_loss(
+                    real_features.mean(0), 
+                    fake_features.mean(0)
+                )
+            
+            # 在训练中使用
+            real_features = self.NetD_Ensemble[0].feature_extractor(real_x0)
+            fake_features = self.NetD_Ensemble[0].feature_extractor(fake_B)
+            fm_loss = feature_matching_loss(real_features, fake_features)
+            
+            gen_loss += 0.1 * fm_loss  # 添加特征匹配损失
+
             self.optimizerG.zero_grad()
             gen_loss.backward()
             self.optimizerG.step()
@@ -472,7 +527,7 @@ class EX_GAN(nn.Module):
         pbar.close()
 
         # 在每个epoch结束时更新学习率
-        self.scheduler_G.step(auc_train)
+        self.scheduler_G.step()
         for scheduler in self.scheduler_D:
             scheduler.step(auc_train)
 

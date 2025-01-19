@@ -24,13 +24,22 @@ pip install -r requirements.txt
 ```
 
 ## Usage
+
+### For MNIST Dataset
 Train the model on MNIST dataset with imbalance ratio 100:
 ```bash
 python train_MINIST.py --ir 100 --max_epochs 10 --ensemble_num 1 --batch_size 128
 ```
 
+### For Tabular Dataset
+Train the model on healthcare dataset:
+```bash
+python train_tabular.py --ir 1.78 --max_epochs 50 --ensemble_num 3 --batch_size 32 --lr_g 0.0001 --lr_d 0.0001
+```
+
 Key parameters:
 ```
+# For MNIST
 --ir: Imbalance ratio (default: 100)
 --max_epochs: Number of training epochs (default: 10)
 --ensemble_num: Number of discriminators in ensemble (default: 1)
@@ -39,6 +48,14 @@ Key parameters:
 --lr_d: Learning rate for discriminator (default: 0.0002)
 --init_type: Weight initialization type (default: 'ortho')
 --SN_used: Whether to use Spectral Normalization (default: True)
+
+# For Tabular Data
+--ir: Imbalance ratio (default: 1.78)
+--max_epochs: Maximum training epochs (default: 50)
+--ensemble_num: Number of discriminators in ensemble (default: 3)
+--batch_size: Batch size (default: 32)
+--lr_g: Generator learning rate (default: 0.0001)
+--lr_d: Discriminator learning rate (default: 0.0001)
 ```
 
 ## Model Architecture
@@ -59,30 +76,58 @@ The EXGAN model consists of:
    - Consistency loss for maintaining class characteristics
 ```
 
+### Tabular Model Architecture
+For tabular data, the model uses:
+```python
+Generator(
+    input_dim=63,          # Feature dimension
+    hidden_dim=256,        # Hidden layer dimension
+    layers=[
+        Linear + InstanceNorm + ReLU + Dropout,
+        Linear + InstanceNorm + ReLU + Dropout,
+        Linear + Tanh
+    ]
+)
+```
+
 ## Directory Structure
 ```
 EXGAN/
 ├── models/
-│   ├── EX_GAN_MINIST.py    # Main model implementation
+│   ├── EX_GAN_MINIST.py    # MNIST model implementation
+│   ├── EX_GAN_Tabular.py   # Tabular model implementation
 │   ├── layers.py           # Custom layer implementations
 │   ├── losses_original.py  # Loss function definitions
 │   └── utils.py           # Utility functions
-├── data/                   # Data directory (created automatically)
+├── data/
+│   └── Health/            # Healthcare dataset directory
+│       └── AI4healthcare.xlsx
 ├── log/                    # Training logs and checkpoints
 ├── results/                # Evaluation results
-├── train_MINIST.py        # Training script
+├── train_MINIST.py        # MNIST training script
+├── train_tabular.py       # Tabular data training script
 └── requirements.txt        # Dependencies
 ```
 
 ## Results
 Results will be saved in:
 ```
-./results/EX-GAN.csv        # Performance metrics (AUC, F1-score, etc.)
-./log/                      # Model checkpoints and training logs
+# For MNIST
+./results/EX-GAN.csv        # Performance metrics
+
+# For Tabular Data
+./results/EX-GAN-Health.csv        # Per-fold results
+./results/EX-GAN-Health-Final.csv  # Final averaged results
 ```
 
 ## Notes
-- The code automatically downloads the MNIST dataset
-- Training logs and model checkpoints are saved in the 'log' directory
-- Final results are saved in CSV format in the 'results' directory
-- GPU is recommended for training, but not required
+- For MNIST:
+  - The code automatically downloads the MNIST dataset
+  - GPU is recommended for training, but not required
+
+- For Tabular Data:
+  - Place your healthcare dataset in data/Health/AI4healthcare.xlsx
+  - Results include AUC, F1, ACC, ACC_0, ACC_1, and G-mean metrics
+  - Uses 10-fold cross validation
+  - Model checkpoints are saved in logs/Health/checkpoint_best.pth
+
