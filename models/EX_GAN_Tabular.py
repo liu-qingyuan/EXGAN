@@ -23,11 +23,10 @@ from .TabularDataset import TabularDataset
 from tqdm import tqdm
 
 class Generator(nn.Module):
-    def __init__(self, input_dim=63, hidden_dim=128, init='ortho', SN_used=True):
+    def __init__(self, input_dim=63, hidden_dim=256, init='ortho', SN_used=True):
         super(Generator, self).__init__()
         self.init = init
         
-        # 使用全连接层替代卷积层
         if SN_used:
             self.which_linear = functools.partial(SNLinear, num_svs=1, num_itrs=1)
         else:
@@ -35,11 +34,15 @@ class Generator(nn.Module):
             
         self.model = nn.Sequential(
             self.which_linear(input_dim, hidden_dim),
+            nn.InstanceNorm1d(hidden_dim),
             nn.ReLU(),
+            nn.Dropout(0.2),
             self.which_linear(hidden_dim, hidden_dim),
+            nn.InstanceNorm1d(hidden_dim),
             nn.ReLU(),
+            nn.Dropout(0.2),
             self.which_linear(hidden_dim, input_dim),
-            nn.Tanh()  # 使用Tanh确保输出在合理范围
+            nn.Tanh()
         )
         
         self.init_weights()
@@ -63,7 +66,7 @@ class Generator(nn.Module):
         return self.model(x)
 
 class Discriminator(nn.Module):
-    def __init__(self, input_dim=63, hidden_dim=128, num_class=2, init='ortho', SN_used=True):
+    def __init__(self, input_dim=63, hidden_dim=256, num_class=2, init='ortho', SN_used=True):
         super(Discriminator, self).__init__()
         self.n_classes = num_class
         self.init = init
@@ -78,9 +81,13 @@ class Discriminator(nn.Module):
         # 特征提取器
         self.feature_extractor = nn.Sequential(
             self.which_linear(input_dim, hidden_dim),
+            nn.InstanceNorm1d(hidden_dim),
             nn.ReLU(),
+            nn.Dropout(0.2),
             self.which_linear(hidden_dim, hidden_dim),
-            nn.ReLU()
+            nn.InstanceNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.2)
         )
 
         # 真假判别器
@@ -151,13 +158,13 @@ class EX_GAN(nn.Module):
         # 准备生成器
         self.netG_A_to_B = Generator(
             input_dim=63,  # 特征维度
-            hidden_dim=128,  # 隐藏层维度
+            hidden_dim=256,  # 隐藏层维度
             init=args.init_type, 
             SN_used=args.SN_used
         )
         self.netG_B_to_A = Generator(
             input_dim=63,
-            hidden_dim=128,
+            hidden_dim=256,
             init=args.init_type, 
             SN_used=args.SN_used
         )
@@ -179,7 +186,7 @@ class EX_GAN(nn.Module):
         for index in range(args.ensemble_num):
             netD = Discriminator(
                 input_dim=63,
-                hidden_dim=128,
+                hidden_dim=256,
                 num_class=2,
                 init=args.init_type, 
                 SN_used=args.SN_used
@@ -188,6 +195,18 @@ class EX_GAN(nn.Module):
             optimizerD = optim.Adam(netD.parameters(), lr=lr_ds[index], betas=(0.00, 0.99))
             self.NetD_Ensemble += [netD]
             self.opti_Ensemble += [optimizerD]
+
+        # 添加学习率调度器
+        self.scheduler_G = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizerG, mode='max', factor=0.5, patience=5, verbose=True
+        )
+        
+        self.scheduler_D = []
+        for optimizer in self.opti_Ensemble:
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='max', factor=0.5, patience=5, verbose=True
+            )
+            self.scheduler_D.append(scheduler)
 
     def fit(self, train_data=None, test_data=None):
         print("\nPreparing datasets...")
@@ -232,6 +251,10 @@ class EX_GAN(nn.Module):
         Best_F_train = -1
         self.train_history = defaultdict(list)
         
+        patience = 10
+        best_epoch = 0
+        no_improve = 0
+        
         for epoch in range(self.args.max_epochs):
             train_AUC, train_score, train_Gmean, test_auc, test_score, test_gmean = self.train_one_epoch(epoch, self.train_loader, self.test_loader)
             if train_score*train_AUC > Best_Measure_Recorded:
@@ -240,6 +263,8 @@ class EX_GAN(nn.Module):
                 Best_F_test = test_score
                 Best_AUC_train = train_AUC
                 Best_F_train = train_score
+                best_epoch = epoch
+                no_improve = 0
 
                 states = {
                     'epoch':epoch,
@@ -253,6 +278,11 @@ class EX_GAN(nn.Module):
                     states['dis_dict'+str(i)] = netD.state_dict()
                 
                 torch.save(states, os.path.join(log_dir, 'checkpoint_best.pth'))
+            else:
+                no_improve += 1
+                if no_improve >= patience:
+                    print(f"Early stopping at epoch {epoch}")
+                    break
             #print(train_AUC, test_AUC, epoch)
             if self.args.print:
                 print('Epoch %d: Train_AUC=%.4f train_fscore=%.4f train_Gmean=%.4f Test_AUC=%.4f test_fscore=%.4f Test_Gmean=%.4f' % (epoch + 1, train_AUC, train_score, train_Gmean, test_auc, test_score, test_gmean))
@@ -420,4 +450,10 @@ class EX_GAN(nn.Module):
             auc_test, fscore_test, gmean_test = get_measure(y_true_test, y_pred_test)
 
         pbar.close()
+
+        # 在每个epoch结束时更新学习率
+        self.scheduler_G.step(auc_train)
+        for scheduler in self.scheduler_D:
+            scheduler.step(auc_train)
+
         return auc_train, fscore_train, gmean_train, auc_test, fscore_test, gmean_test
