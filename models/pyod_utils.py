@@ -15,7 +15,7 @@ import math
 import torch
 
 import sklearn
-from sklearn.metrics import precision_score, f1_score
+from sklearn.metrics import precision_score, f1_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 from sklearn.utils import column_or_1d
@@ -24,7 +24,6 @@ from sklearn.utils import check_consistent_length
 
 from sklearn.utils import check_random_state
 from sklearn.utils.random import sample_without_replacement
-from sklearn.metrics   import roc_auc_score
 
 MAX_INT = np.iinfo(np.int32).max
 MIN_INT = -1 * MAX_INT
@@ -388,13 +387,50 @@ def AUC_and_Gmean(y_test, y_scores):
     gmean = round(get_gmean(y_test, y_scores, 0.5), ndigits=4)
     return auc, gmean
 
-def get_measure(y_real, y_pred):
-    auc = round(roc_auc_score(y_real, y_pred), ndigits=4)
-    #s = get_gmean(y_test, y_scores, 0.5)
-    #print(s)
-    f1 = round(get_f_score(y_real, y_pred), ndigits=4)
-    gmean = round(get_gmean(y_real, y_pred, 0.5), ndigits=4)
-    return auc, f1, gmean
+def geometric_mean_score(y_true, y_pred):
+    """Calculate geometric mean score
+    
+    Parameters
+    ----------
+    y_true : array-like
+        True binary labels
+    y_pred : array-like
+        Predicted binary labels
+        
+    Returns
+    -------
+    float
+        Geometric mean score
+    """
+    # 计算每个类别的准确率
+    tp = ((y_true == 1) & (y_pred == 1)).sum()
+    tn = ((y_true == 0) & (y_pred == 0)).sum()
+    p = (y_true == 1).sum()
+    n = (y_true == 0).sum()
+    
+    # 计算敏感度(TPR)和特异度(TNR)
+    tpr = tp / p if p > 0 else 0
+    tnr = tn / n if n > 0 else 0
+    
+    # 计算几何平均
+    return np.sqrt(tpr * tnr)
+
+def get_measure(y_true, y_pred, threshold=0.5):
+    y_pred_labels = (y_pred >= threshold).astype(int)
+    
+    # 计算总体准确率
+    acc = np.mean(y_true == y_pred_labels)
+    
+    # 计算每个类别的准确率
+    acc_0 = np.mean(y_pred_labels[y_true == 0] == 0)  # 健康类准确率
+    acc_1 = np.mean(y_pred_labels[y_true == 1] == 1)  # 患病类准确率
+    
+    # 原有的指标计算
+    auc = roc_auc_score(y_true, y_pred)
+    fscore = f1_score(y_true, y_pred_labels)
+    gmean = geometric_mean_score(y_true, y_pred_labels)
+    
+    return auc, fscore, gmean, acc, acc_0, acc_1
 
 
 def get_measure_category(y_true, y_score):

@@ -19,7 +19,7 @@ from models.TabularDataset import TabularDataset
 n_folds = 10
 result_dir = "./results/"
 
-df_columns = ['IR', 'AUC', 'F1', 'time', 'time_std']
+df_columns = ['IR', 'AUC', 'F1', 'ACC', 'ACC_0', 'ACC_1', 'G-mean', 'time', 'time_std']
 roc_df = pd.DataFrame(columns=df_columns)
 
 # initialize the container for saving the results
@@ -77,7 +77,9 @@ for fold, (train_idx, test_idx) in enumerate(kf.split(X)):
     cb_gan = EX_GAN(args)
     
     print("Starting model training...")
-    auc_train, f_train, auc_test, f_test = cb_gan.fit(
+    # 训练模型并获取预测结果
+    auc_train, f_train, gmean_train, acc_train, acc_0_train, acc_1_train, \
+    auc_test, f_test, gmean_test, acc_test, acc_0_test, acc_1_test = cb_gan.fit(
         train_data=train_dataset,
         test_data=test_dataset
     )
@@ -91,31 +93,60 @@ for fold, (train_idx, test_idx) in enumerate(kf.split(X)):
     print(f"Test Set Size: {len(test_dataset)}")
     print(f"Train Class Distribution: {np.bincount(train_dataset.targets)}")
     print(f"Test Class Distribution: {np.bincount(test_dataset.targets)}")
-    print(f"Training - AUC: {auc_train:.4f}, F-score: {f_train:.4f}")
-    print(f"Testing  - AUC: {auc_test:.4f}, F-score: {f_test:.4f}")
-    print(f"Execution time: {duration:.4f} seconds")
-    print("-" * 50)
+    print("\nTraining Metrics:")
+    print(f"AUC: {auc_train:.4f}, F1: {f_train:.4f}, G-mean: {gmean_train:.4f}")
+    print(f"ACC: {acc_train:.4f} (Class 0: {acc_0_train:.4f}, Class 1: {acc_1_train:.4f})")
+    print("\nTesting Metrics:")
+    print(f"AUC: {auc_test:.4f}, F1: {f_test:.4f}, G-mean: {gmean_test:.4f}")
+    print(f"ACC: {acc_test:.4f} (Class 0: {acc_0_test:.4f}, Class 1: {acc_1_test:.4f})")
+    print(f"\nExecution time: {duration:.4f} seconds")
+    print("-" * 80)
 
     time_mat[fold, 0] = duration
     roc_mat[fold, 0] = auc_test
     fscore_mat[fold, 0] = f_test
 
-# 计算平均结果
-print("\nOverall Results:")
-print(f"Average Test AUC: {np.mean(roc_mat):.4f} ± {np.std(roc_mat):.4f}")
-print(f"Average Test F1: {np.mean(fscore_mat):.4f} ± {np.std(fscore_mat):.4f}")
-print(f"Average Time: {np.mean(time_mat):.4f} ± {np.std(time_mat):.4f}")
+    # 保存每个fold的结果
+    fold_results = {
+        'IR': ir,
+        'AUC': auc_test,
+        'F1': f_test,
+        'ACC': acc_test,
+        'ACC_0': acc_0_test,
+        'ACC_1': acc_1_test,
+        'G-mean': gmean_test,
+        'time': duration,
+        'time_std': 0
+    }
+    temp_df = pd.DataFrame([fold_results])
+    roc_df = pd.concat([roc_df, temp_df], ignore_index=True)
+    
+    # 保存当前进度
+    save_path = os.path.join(result_dir, 'EX-GAN-Health.csv')
+    roc_df.to_csv(save_path, index=False, float_format='%.3f')
 
-roc_list = [ir]
-roc_list.append(np.mean(roc_mat, axis=0).item())
-roc_list.append(np.mean(fscore_mat, axis=0).item())
-roc_list.append(np.mean(time_mat, axis=0).item())
-roc_list.append(np.std(time_mat, axis=0).item())
+# 计算并更新最终结果
+final_results = {
+    'IR': ir,
+    'AUC': np.mean(roc_df['AUC']),
+    'F1': np.mean(roc_df['F1']),
+    'ACC': np.mean(roc_df['ACC']),
+    'ACC_0': np.mean(roc_df['ACC_0']),
+    'ACC_1': np.mean(roc_df['ACC_1']),
+    'G-mean': np.mean(roc_df['G-mean']),
+    'time': np.mean(roc_df['time']),
+    'time_std': np.std(roc_df['time'])
+}
 
-temp_df = pd.DataFrame(roc_list).transpose()
-temp_df.columns = df_columns
-roc_df = pd.concat([roc_df, temp_df], axis=0)
+print("\nFinal Results:")
+print(f"Average Test AUC: {final_results['AUC']:.4f} ± {np.std(roc_df['AUC']):.4f}")
+print(f"Average Test F1: {final_results['F1']:.4f} ± {np.std(roc_df['F1']):.4f}")
+print(f"Average Test ACC: {final_results['ACC']:.4f} ± {np.std(roc_df['ACC']):.4f}")
+print(f"Average Test ACC_0: {final_results['ACC_0']:.4f} ± {np.std(roc_df['ACC_0']):.4f}")
+print(f"Average Test ACC_1: {final_results['ACC_1']:.4f} ± {np.std(roc_df['ACC_1']):.4f}")
+print(f"Average Time: {final_results['time']:.4f} ± {final_results['time_std']:.4f}")
 
-# Save the results for each run
-save_path1 = os.path.join(result_dir, 'EX-GAN-Health.csv')
-roc_df.to_csv(save_path1, index=False, float_format='%.3f') 
+# 保存最终结果
+final_df = pd.DataFrame([final_results])
+save_path = os.path.join(result_dir, 'EX-GAN-Health-Final.csv')
+final_df.to_csv(save_path, index=False, float_format='%.3f') 

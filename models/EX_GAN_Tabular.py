@@ -256,7 +256,11 @@ class EX_GAN(nn.Module):
         no_improve = 0
         
         for epoch in range(self.args.max_epochs):
-            train_AUC, train_score, train_Gmean, test_auc, test_score, test_gmean = self.train_one_epoch(epoch, self.train_loader, self.test_loader)
+            # 修改这里以接收所有返回值
+            (train_AUC, train_score, train_Gmean, train_acc, train_acc_0, train_acc_1,
+             test_auc, test_score, test_gmean, test_acc, test_acc_0, test_acc_1) = self.train_one_epoch(
+                epoch, self.train_loader, self.test_loader)
+            
             if train_score*train_AUC > Best_Measure_Recorded:
                 Best_Measure_Recorded = train_score*train_AUC
                 Best_AUC_test = test_auc
@@ -283,33 +287,48 @@ class EX_GAN(nn.Module):
                 if no_improve >= patience:
                     print(f"Early stopping at epoch {epoch}")
                     break
-            #print(train_AUC, test_AUC, epoch)
             if self.args.print:
-                print('Epoch %d: Train_AUC=%.4f train_fscore=%.4f train_Gmean=%.4f Test_AUC=%.4f test_fscore=%.4f Test_Gmean=%.4f' % (epoch + 1, train_AUC, train_score, train_Gmean, test_auc, test_score, test_gmean))
+                print('Epoch %d: Train_AUC=%.4f train_fscore=%.4f train_Gmean=%.4f train_ACC=%.4f Test_AUC=%.4f test_fscore=%.4f Test_Gmean=%.4f test_ACC=%.4f' 
+                      % (epoch + 1, train_AUC, train_score, train_Gmean, train_acc, 
+                         test_auc, test_score, test_gmean, test_acc))
         
        
         #step 1: load the best models
         self.Best_Ensemble = []
         try:
-            # 添加 map_location 参数来确保模型加载到正确的设备
-            states = torch.load(
-                os.path.join(log_dir, 'checkpoint_best.pth'),
-                map_location=self.device
-            )
+            # 修改加载模型的代码，确保正确处理设备映射
+            if torch.cuda.is_available():
+                states = torch.load(os.path.join(log_dir, 'checkpoint_best.pth'))
+            else:
+                states = torch.load(
+                    os.path.join(log_dir, 'checkpoint_best.pth'),
+                    map_location=torch.device('cpu')
+                )
+            
             self.netG_A_to_B.load_state_dict(states['gen_A_to_B'])
             self.netG_B_to_A.load_state_dict(states['gen_B_to_A'])
+            
             for i in range(self.args.ensemble_num):
                 netD = self.NetD_Ensemble[i]
                 netD.load_state_dict(states['dis_dict'+str(i)])
-                # 确保判别器在正确的设备上
-                netD = netD.to(self.device)
+                netD = netD.to(self.device)  # 确保模型在正确的设备上
                 self.Best_Ensemble += [netD]
+            
         except Exception as e:
-            print(f"Warning: Could not load best model: {str(e)}")
-            # 如果加载失败，使用当前模型
+            print(f"Warning: Could not load best model, using current model instead. Error: {str(e)}")
             self.Best_Ensemble = self.NetD_Ensemble
         
-        return Best_AUC_train, Best_F_train, Best_AUC_test, Best_F_test
+        # 在训练结束后评估最终模型
+        print("\nEvaluating final model...")
+        with torch.no_grad():
+            y_pred_train, y_true_train, _ = self.predict(self.train_loader, self.Best_Ensemble)
+            y_pred_test, y_true_test, _ = self.predict(self.test_loader, self.Best_Ensemble)
+            
+            # 计算所有指标
+            train_metrics = get_measure(y_true_train, y_pred_train)
+            test_metrics = get_measure(y_true_test, y_pred_test)
+        
+        return (*train_metrics, *test_metrics)  # 返回所有训练集和测试集的指标
     
     def predict(self, data_loader, dis_Ensemble=None, need_explain=False):
         y_pred = []
@@ -446,8 +465,9 @@ class EX_GAN(nn.Module):
             y_pred_train, y_true_train, _ = self.predict(train_loader, self.NetD_Ensemble)
             y_pred_test, y_true_test, _ = self.predict(test_loader, self.NetD_Ensemble)
             
-            auc_train, fscore_train, gmean_train = get_measure(y_true_train, y_pred_train)
-            auc_test, fscore_test, gmean_test = get_measure(y_true_test, y_pred_test)
+            # 修改这里以接收所有6个返回值
+            auc_train, fscore_train, gmean_train, acc_train, acc_0_train, acc_1_train = get_measure(y_true_train, y_pred_train)
+            auc_test, fscore_test, gmean_test, acc_test, acc_0_test, acc_1_test = get_measure(y_true_test, y_pred_test)
 
         pbar.close()
 
@@ -456,4 +476,6 @@ class EX_GAN(nn.Module):
         for scheduler in self.scheduler_D:
             scheduler.step(auc_train)
 
-        return auc_train, fscore_train, gmean_train, auc_test, fscore_test, gmean_test
+        # 返回所有指标
+        return (auc_train, fscore_train, gmean_train, acc_train, acc_0_train, acc_1_train,
+                auc_test, fscore_test, gmean_test, acc_test, acc_0_test, acc_1_test)
