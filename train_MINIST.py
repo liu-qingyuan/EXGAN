@@ -77,9 +77,12 @@ for _ in range(n_folds):
     fscore_mat[count, 0] = f_test
     count += 1
 
-roc_list = roc_list + np.mean(roc_mat, axis=0).tolist() + np.std(roc_mat, axis=0).tolist() + \
-                    np.mean(fscore_mat, axis=0).tolist() + np.std(fscore_mat, axis=0).tolist() + \
-                    np.mean(time_mat, axis=0).tolist() + np.std(time_mat, axis=0).tolist()
+roc_list = [ir]
+roc_list.append(np.mean(roc_mat, axis=0).item())
+roc_list.append(np.mean(fscore_mat, axis=0).item())
+roc_list.append(np.mean(time_mat, axis=0).item())
+roc_list.append(np.std(time_mat, axis=0).item())
+
 temp_df = pd.DataFrame(roc_list).transpose()
 temp_df.columns = df_columns
 roc_df = pd.concat([roc_df, temp_df], axis=0)
